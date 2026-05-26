@@ -1,0 +1,359 @@
+// src/components/admin/OrdersView.jsx
+import { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
+import {
+  ShoppingBag, Search, RefreshCw, MoreHorizontal, Eye, Printer,
+  FileDown, ClipboardCopy, Trash2, Phone, Download
+} from "lucide-react";
+import { useOrders } from "../../contexts/OrdersContext";
+import { currency } from "../../utils/format";
+import StatusBadge, { ORDER_STATUS } from './StatusBadge';
+import { PAYMENT_STATUS } from '../../utils/adminMetrics';
+import StatusDropdown from './StatusDropdown';
+import OrderDetailsModal from './OrderDetailsModal';
+import { exportOrders } from '../../utils/exportCsv';
+import EmptyState from './EmptyState';
+
+function OrdersView({ toastShow }) {
+  const { orders, updateOrderStatus, fetchOrders, loading } = useOrders();
+  const [search,    setSearch]    = useState('');
+  const [filter,    setFilter]    = useState('all');
+  const [actionFor, setActionFor] = useState(null);
+  const [detailFor, setDetailFor] = useState(null);
+
+  const getActionMenuPos = (button, menuHeight = 260) => {
+    const rect = button.getBoundingClientRect();
+    const menuWidth = 190;
+    const gap = 6;
+    const margin = 12;
+    const openUp = window.innerHeight - rect.bottom < menuHeight + gap && rect.top > menuHeight + gap;
+
+    const top = openUp ? rect.top - menuHeight - gap : rect.bottom + gap;
+    const maxTop = Math.max(margin, window.innerHeight - menuHeight - margin);
+
+    return {
+      top: Math.min(Math.max(top, margin), maxTop),
+      left: Math.min(
+        Math.max(rect.right - menuWidth, margin),
+        window.innerWidth - menuWidth - margin
+      ),
+      origin: openUp ? 'bottom right' : 'top right',
+    };
+  };
+
+  const toggleActionMenu = (id, button) => {
+    setActionFor(current => (
+      current?.id === id ? null : { id, pos: getActionMenuPos(button) }
+    ));
+  };
+
+  const filtered = orders.filter(o => {
+    const q = search.toLowerCase();
+    const matchSearch = !q || o._id?.toLowerCase().includes(q) || o.customerName?.toLowerCase().includes(q) || o.phone?.includes(q);
+    const matchFilter = filter === 'all' || o.status === filter;
+    return matchSearch && matchFilter;
+  });
+
+  useEffect(() => {
+    if (!actionFor) return;
+    const handleClick = (e) => {
+      if (!e.target.closest('.dropdown-menu')) setActionFor(null);
+    };
+    const handleViewportChange = () => setActionFor(null);
+    document.addEventListener('click', handleClick);
+    window.addEventListener('resize', handleViewportChange);
+    window.addEventListener('scroll', handleViewportChange, true);
+    return () => {
+      document.removeEventListener('click', handleClick);
+      window.removeEventListener('resize', handleViewportChange);
+      window.removeEventListener('scroll', handleViewportChange, true);
+    };
+  }, [actionFor]);
+
+  const copyText = async (text, label) => {
+    try {
+      // Орчин үеийн Clipboard API — бүх browser дэмждэг
+      await navigator.clipboard.writeText(String(text ?? ''));
+      toastShow?.(`${label} хуулбарлагдлаа`);
+    } catch (err) {
+      console.error('Clipboard алдаа:', err);
+      toastShow?.('Хуулбарлах амжилтгүй болсон', 'error');
+    }
+  };
+
+  const downloadJSON = (obj, filename) => {
+    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+    toastShow?.('JSON татагдлаа');
+  };
+
+  const handleStatusChange = async (order, status) => {
+    let reason = '';
+    if (status === 'cancelled') {
+      reason = window.prompt('Цуцлах шалтгаан:', 'Үйлчлүүлэгч цуцалсан') || '';
+      if (!reason.trim()) return;
+    }
+
+    try {
+      const updated = await updateOrderStatus(order._id, status, reason);
+      if (updated?._id && detailFor?._id === updated._id) setDetailFor(updated);
+      toastShow?.('Төлөв шинэчлэгдлээ');
+    } catch (error) {
+      toastShow?.(error.message || 'Төлөв шинэчлэх боломжгүй', 'error');
+      throw error;
+    }
+  };
+
+  const printOrder = (o) => {
+    const itemsLine = (o.items ?? []).map(i => `
+      <tr>
+        <td style="padding:6px 0;border-bottom:1px solid #f1f5f9">${i.name} × ${i.quantity}</td>
+        <td style="text-align:right;padding:6px 0;border-bottom:1px solid #f1f5f9;font-weight:700">${currency((i.price??0)*(i.quantity??1))}</td>
+      </tr>
+    `).join('');
+    const win = window.open('', '_blank', 'width=440,height=640');
+    if (!win) return;
+    win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"/><title>Баримт #${o._id?.slice(-6).toUpperCase()}</title>
+    <style>*{box-sizing:border-box}body{font-family:'Segoe UI',sans-serif;margin:0;padding:28px;color:#0f172a;max-width:380px;margin:auto}.header{text-align:center;margin-bottom:20px;padding-bottom:16px;border-bottom:2px dashed #e2e8f0}.logo{font-size:22px;font-weight:900;color:#f59e0b;margin-bottom:4px}.sub{font-size:12px;color:#94a3b8}.id{font-size:14px;font-weight:700;margin-bottom:2px}.section{margin:16px 0}.label{font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}.val{font-size:14px;font-weight:600}table{width:100%;border-collapse:collapse;font-size:13px}.total{font-size:17px;font-weight:900;color:#f59e0b;text-align:right;padding-top:12px}.status{display:inline-block;padding:4px 12px;border-radius:99px;font-size:11px;font-weight:700;background:#fef3c7;color:#d97706}.footer{margin-top:20px;text-align:center;font-size:11px;color:#94a3b8}</style>
+    </head><body>
+    <div class="header"><div class="logo">🍽 Viva</div><div class="sub">Захиалгын баримт</div></div>
+    <div class="id">#${o._id?.slice(-6).toUpperCase()}</div>
+    <div style="font-size:12px;color:#94a3b8;margin-bottom:16px">${new Date(o.createdAt).toLocaleString('mn-MN')}</div>
+    <div class="section"><div class="label">Хэрэглэгч</div><div class="val">${o.customerName||'Зочин'}</div>${o.phone?`<div style="font-size:12px;color:#64748b">${o.phone}</div>`:''}</div>
+    <div class="section"><div class="label">Захиалсан зүйлс</div><table>${itemsLine}</table><div class="total">Нийт: ${currency(o.totalAmount||0)}</div></div>
+    <div class="section"><span class="status">${ORDER_STATUS[o.status]?.label||o.status}</span></div>
+    <div class="footer">Баярлалаа! ✦ huuk.mn</div>
+    <script>window.onload=()=>{window.print();setTimeout(()=>window.close(),400)}<\/script></body></html>`);
+    win.document.close();
+  };
+
+  const filterTabs = [
+    { key: 'all', label: 'Бүгд', count: orders.length },
+    ...Object.entries(ORDER_STATUS).map(([k, v]) => ({ key: k, label: v.label, count: orders.filter(o => o.status === k).length })),
+  ];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 3 }}>
+            <ShoppingBag size={13} color="var(--text-faint)" />
+            <span style={{ fontSize: 11, color: 'var(--text-faint)', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700 }}>Удирдлага</span>
+          </div>
+          <h1 style={{ fontSize: 22, fontWeight: 800, letterSpacing: '-0.03em' }}>Захиалгууд</h1>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ position: 'relative' }}>
+            <Search size={13} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-faint)' }} />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Хайх..."
+              className="input-field" style={{ paddingLeft: 34, width: 220 }} />
+          </div>
+          <button
+            onClick={() => {
+              if (!filtered.length) return toastShow?.('Экспортлох өгөгдөл алга', 'error');
+              exportOrders(filtered);
+              toastShow?.(`${filtered.length} захиалга экспортлогдлоо`);
+            }}
+            className="btn btn-ghost"
+            title="CSV татах"
+          >
+            <Download size={13} /> Экспорт
+          </button>
+          <button onClick={fetchOrders} className="btn btn-ghost">
+            <RefreshCw size={13} /> Шинэчлэх
+          </button>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 6 }}>
+        {filterTabs.map(t => (
+          <button key={t.key} onClick={() => setFilter(t.key)}
+            style={{
+              padding: '6px 14px', borderRadius: 99, fontSize: 12, fontWeight: 600,
+              cursor: 'pointer', transition: 'all 0.15s',
+              border: filter === t.key ? '1px solid rgba(245,158,11,0.4)' : '1px solid var(--border)',
+              background: filter === t.key ? 'var(--accent-soft)' : 'var(--bg-elevated)',
+              color: filter === t.key ? 'var(--accent)' : 'var(--text-muted)',
+              fontFamily: 'var(--font-main)',
+              display: 'flex', alignItems: 'center', gap: 6,
+            }}
+          >
+            {t.label}
+            <span className="mono" style={{
+              fontSize: 10, padding: '1px 5px', borderRadius: 99,
+              background: filter === t.key ? 'rgba(245,158,11,0.2)' : 'var(--border)',
+            }}>{t.count}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="glass-card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Захиалга #</th>
+                <th>Хэрэглэгч</th>
+                <th>Огноо</th>
+                <th>Зүйлс</th>
+                <th>Нийт</th>
+                <th>Төлбөр</th>
+                <th>Төлөв</th>
+                <th style={{ textAlign: 'right' }}>Үйлдэл</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                Array.from({ length: 5 }).map((_, i) => (
+                  <tr key={i} className="data-row">
+                    {Array.from({ length: 8 }).map((_, j) => (
+                      <td key={j}><div className="skeleton" style={{ height: 14, width: j === 3 ? 140 : 80 }} /></td>
+                    ))}
+                  </tr>
+                ))
+              ) : filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={8} style={{ padding: 0 }}>
+                    <EmptyState
+                      icon={search ? Search : ShoppingBag}
+                      title={search ? 'Хайлтын үр дүн олдсонгүй' : 'Захиалга хараахан алга'}
+                      description={search
+                        ? `"${search}" гэсэн үгээр ямар ч захиалга олдсонгүй. Өөр түлхүүр үг туршаад үзнэ үү.`
+                        : 'Хэрэглэгч онлайнаар захиалга өгмөгц энд шууд харагдана. Та шинэ захиалга орж ирэхийг хүлээж байна.'}
+                      color={search ? 'neutral' : 'accent'}
+                    />
+                  </td>
+                </tr>
+              ) : filtered.map((o) => (
+                <tr key={o._id} className="data-row">
+                  <td>
+                    <span className="mono" style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent)' }}>
+                      #{o._id?.slice(-6).toUpperCase()}
+                    </span>
+                  </td>
+                  <td>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                      <div className="avatar" style={{ background: 'var(--bg-elevated)', color: 'var(--text-muted)', fontSize: 11 }}>
+                        {(o.customerName || 'З')[0].toUpperCase()}
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 600 }}>{o.customerName || 'Зочин'}</div>
+                        {o.phone && <div style={{ fontSize: 11, color: 'var(--text-faint)', fontFamily: 'var(--font-mono)' }}>{o.phone}</div>}
+                      </div>
+                    </div>
+                  </td>
+                  <td>
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{new Date(o.createdAt).toLocaleDateString('mn-MN')}</div>
+                    <div className="mono" style={{ fontSize: 11, color: 'var(--text-faint)' }}>{new Date(o.createdAt).toLocaleTimeString('mn-MN', { hour: '2-digit', minute: '2-digit' })}</div>
+                  </td>
+                  <td style={{ maxWidth: 180 }}>
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {o.items?.map(i => `${i.name} ×${i.quantity}`).join(', ') || '—'}
+                    </div>
+                    {o.items?.length > 0 && <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 2 }}>{o.items.length} зүйл</div>}
+                  </td>
+                  <td>
+                    <span className="mono" style={{ fontSize: 13, fontWeight: 800, color: '#f59e0b' }}>{currency(o.totalAmount || 0)}</span>
+                  </td>
+                  <td>
+                    {o.paymentStatus ? (
+                      <span style={{
+                        fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 99,
+                        background: `${PAYMENT_STATUS[o.paymentStatus]?.color || '#64748b'}22`,
+                        color: PAYMENT_STATUS[o.paymentStatus]?.color || 'var(--text-muted)',
+                      }}>
+                        {PAYMENT_STATUS[o.paymentStatus]?.label || o.paymentStatus}
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>—</span>
+                    )}
+                  </td>
+                  <td>
+                    <StatusDropdown
+                      value={o.status}
+                      onChange={s => handleStatusChange(o, s)}
+                      statusMap={ORDER_STATUS}
+                    />
+                  </td>
+                  <td style={{ textAlign: 'right', position: 'relative' }}>
+                    <div>
+                      <button
+                        onClick={e => { e.stopPropagation(); toggleActionMenu(o._id, e.currentTarget); }}
+                        style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 8, padding: '6px 8px', cursor: 'pointer', color: 'var(--text-muted)', transition: 'all 0.15s' }}
+                      >
+                        <MoreHorizontal size={14} />
+                      </button>
+                      {actionFor?.id === o._id && createPortal(
+                        <div
+                          onClick={e => e.stopPropagation()}
+                          style={{
+                            position: 'fixed',
+                            top: actionFor.pos.top,
+                            left: actionFor.pos.left,
+                            zIndex: 9999,
+                            minWidth: 190,
+                            maxHeight: 'calc(100vh - 24px)',
+                            overflowY: 'auto',
+                            transformOrigin: actionFor.pos.origin,
+                          }}
+                          className="dropdown-menu"
+                        >
+                          <button className="dropdown-item" onClick={() => { setDetailFor(o); setActionFor(null); }}>
+                            <Eye size={13} /> Дэлгэрэнгүй
+                          </button>
+                          <div className="dropdown-divider" />
+                          <button className="dropdown-item" onClick={() => { printOrder(o); setActionFor(null); }}>
+                            <Printer size={13} /> Хэвлэх
+                          </button>
+                          <button className="dropdown-item" onClick={() => { downloadJSON(o, `order-${o._id}.json`); setActionFor(null); }}>
+                            <FileDown size={13} /> JSON татах
+                          </button>
+                          <button className="dropdown-item" onClick={() => { copyText(o._id, 'Захиалгын ID'); setActionFor(null); }}>
+                            <ClipboardCopy size={13} /> ID хуулбарлах
+                          </button>
+                          {o.phone && (
+                            <button className="dropdown-item" onClick={() => { copyText(o.phone, 'Утасны дугаар'); setActionFor(null); }}>
+                              <Phone size={13} /> Утас хуулбарлах
+                            </button>
+                          )}
+                          <div className="dropdown-divider" />
+                          <button className="dropdown-item danger" onClick={() => {
+                            handleStatusChange(o, 'cancelled');
+                            setActionFor(null);
+                          }}>
+                            <Trash2 size={13} /> Цуцлах
+                          </button>
+                        </div>,
+                        document.body
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {filtered.length > 0 && (
+          <div style={{ padding: '12px 20px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>{filtered.length} захиалга харагдаж байна</span>
+          </div>
+        )}
+      </div>
+
+      {detailFor && (
+        <OrderDetailsModal
+          order={detailFor}
+          onClose={() => setDetailFor(null)}
+          onPrint={() => printOrder(detailFor)}
+          onStatus={s => handleStatusChange(detailFor, s)}
+          toastShow={toastShow}
+        />
+      )}
+    </div>
+  );
+}
+
+export default OrdersView;
