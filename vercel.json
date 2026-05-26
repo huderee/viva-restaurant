@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://viva-restaurant-api.vercel.app/api/:path*"
+      "destination": "https://restaurant-backend-telt.onrender.com/api/:path*"
     },
     {
       "source": "/(.*)",
